@@ -1,0 +1,7 @@
+node_modules
+coverage
+reports
+data
+.git
+.env
+*.md
