@@ -61,7 +61,7 @@ something real to do.
 | Config             | dotenv + `src/config`                          |
 | Logging            | Custom structured JSON logger (`src/utils`)    |
 | Testing            | Jest, Supertest                                |
-| Code quality       | ESLint, SonarQube                              |
+| Code quality       | ESLint, SonarCloud                              |
 | Security scanning  | npm audit, Snyk (or swap for Trivy)            |
 | Containerization   | Docker, Docker Compose                         |
 | Monitoring         | prom-client (Prometheus-compatible)            |
@@ -126,7 +126,7 @@ environment variables (see `.env.example`):
    tagged, versioned Docker image (the build artefact).
 2. **Test** — Jest + Supertest run unit/integration tests against the auth and task
    endpoints; results are published as JUnit XML for Jenkins' test reporting UI.
-3. **Code Quality** — ESLint runs first as a fast static check, then SonarQube runs a
+3. **Code Quality** — ESLint runs first as a fast static check, then SonarCloud runs a
    deeper analysis (duplication, complexity, maintainability) using
    `sonar-project.properties`.
 4. **Security** — `npm audit` plus Snyk (dependency **and** container image scanning)
