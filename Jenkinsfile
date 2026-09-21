@@ -39,7 +39,7 @@ pipeline {
 
                     echo "Installing dependencies..."
 
-                    npm ci
+                    npm ci --loglevel=error
 
                     echo "Running application build..."
 
@@ -116,17 +116,21 @@ pipeline {
                 '''
 
                 withSonarQubeEnv('SonarQube') {
-                    sh '''
-                        set -e
+                    withEnv([
+                        'SONAR_SCANNER_JAVA_OPTS=--enable-final-field-mutation=ALL-UNNAMED'
+                    ]) {
+                        sh '''
+                            set -e
 
-                        echo "Running SonarCloud analysis..."
+                            echo "Running SonarCloud analysis..."
 
-                        sonar-scanner \
-                            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                            -Dsonar.organization=${SONAR_ORGANIZATION} \
-                            -Dsonar.qualitygate.wait=true \
-                            -Dsonar.qualitygate.timeout=300
-                    '''
+                            sonar-scanner \
+                                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                -Dsonar.organization=${SONAR_ORGANIZATION} \
+                                -Dsonar.qualitygate.wait=true \
+                                -Dsonar.qualitygate.timeout=300
+                        '''
+                    }
                 }
             }
         }
@@ -203,6 +207,8 @@ pipeline {
                             up -d taskflow-api
 
                         echo "Waiting for staging application to become healthy..."
+
+                        sleep 5
 
                         for i in $(seq 1 12); do
 
@@ -305,9 +311,26 @@ pipeline {
                             -m "Release ${RELEASE_VERSION}" \
                             "${GIT_COMMIT}"
 
-                        echo "Publishing Git release tag through GitHub API..."
+                        echo "Preparing GitHub API request..."
 
-                        GITHUB_API_URL="https://api.github.com/repos/Anshuman3311/TaskFlow-DevOps-Pipeline/git/refs"
+                        node <<'NODE'
+const fs = require('fs');
+
+const payload = {
+    ref: `refs/tags/${process.env.GIT_TAG}`,
+    sha: process.env.GIT_COMMIT
+};
+
+fs.writeFileSync(
+    'github-tag.json',
+    JSON.stringify(payload)
+);
+NODE
+
+                        echo "GitHub API payload:"
+                        cat github-tag.json
+
+                        echo "Publishing Git release tag through GitHub API..."
 
                         HTTP_STATUS=$(curl -sS \
                             -o github-release-response.json \
@@ -316,8 +339,11 @@ pipeline {
                             -H "Accept: application/vnd.github+json" \
                             -H "Authorization: Bearer ${GIT_PASSWORD}" \
                             -H "X-GitHub-Api-Version: 2022-11-28" \
-                            "${GITHUB_API_URL}" \
-                            -d "{\"ref\":\"refs/tags/${GIT_TAG}\",\"sha\":\"${GIT_COMMIT}\"}")
+                            -H "Content-Type: application/json" \
+                            "https://api.github.com/repos/Anshuman3311/TaskFlow-DevOps-Pipeline/git/refs" \
+                            --data-binary @github-tag.json)
+
+                        echo "GitHub API response status: ${HTTP_STATUS}"
 
                         if [ "${HTTP_STATUS}" = "201" ]; then
 
@@ -325,9 +351,13 @@ pipeline {
 
                         elif [ "${HTTP_STATUS}" = "422" ]; then
 
-                            if grep -q '"already_exists"' github-release-response.json; then
+                            if grep -q '"already_exists"' \
+                                github-release-response.json; then
+
                                 echo "GitHub release tag ${GIT_TAG} already exists."
+
                             else
+
                                 echo "GitHub rejected the release tag request."
                                 cat github-release-response.json
                                 exit 1
@@ -359,6 +389,8 @@ pipeline {
 
                         echo "Waiting for production application..."
 
+                        sleep 5
+
                         for i in $(seq 1 12); do
 
                             if curl -fsS \
@@ -378,6 +410,17 @@ pipeline {
 
                         echo "Production deployment failed."
                         exit 1
+                    '''
+                }
+            }
+
+            post {
+                always {
+                    sh '''
+                        rm -f \
+                            github-tag.json \
+                            github-release-response.json \
+                            2>/dev/null || true
                     '''
                 }
             }
@@ -407,6 +450,11 @@ pipeline {
 
                     echo
 
+                    echo "Checking Prometheus container..."
+
+                    docker inspect taskflow-prometheus \
+                        >/dev/null
+
                     echo "Connecting Prometheus to production Docker network..."
 
                     docker network connect \
@@ -419,7 +467,6 @@ pipeline {
                     sleep 20
 
                     echo
-
                     echo "Checking Prometheus target health..."
 
                     TARGETS=$(curl -fsS \
@@ -427,10 +474,11 @@ pipeline {
 
                     echo "$TARGETS"
 
+                    echo "$TARGETS" | grep -q '"job":"taskflow-api"'
                     echo "$TARGETS" | grep -q '"health":"up"'
 
                     echo
-                    echo "Prometheus target is UP."
+                    echo "Prometheus TaskFlow API target is UP."
 
                     echo
                     echo "Monitoring verification completed successfully."
