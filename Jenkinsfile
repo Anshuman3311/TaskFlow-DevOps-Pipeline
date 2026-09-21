@@ -278,13 +278,9 @@ pipeline {
         // STAGE 6 - RELEASE
         // =====================================================
         stage('Release') {
-    when {
-        anyOf {
-            branch 'main'                              // works if this ever becomes a Multibranch job
-            expression { env.GIT_BRANCH == 'main' }
-            expression { env.GIT_BRANCH == 'origin/main' }
-        }
-    }
+            when {
+                branch 'main'
+            }
 
             steps {
                 echo '========== RELEASE STAGE =========='
