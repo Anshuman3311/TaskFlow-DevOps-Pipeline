@@ -1,4 +1,4 @@
-pipeline {
+kpipeline {
     agent any
 
     environment {
@@ -44,14 +44,17 @@ pipeline {
                     set -e
 
                     echo "Checking required build tools..."
+
                     node --version
                     npm --version
                     docker --version
 
                     echo "Installing dependencies..."
+
                     npm ci
 
                     echo "Running application build..."
+
                     npm run build
 
                     echo "Building Docker image..."
@@ -67,6 +70,7 @@ pipeline {
                     docker push ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}
 
                     echo "Build artifact created:"
+
                     echo "  ${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
                     echo "  ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}"
                 '''
@@ -174,6 +178,7 @@ pipeline {
                         --output trivy-report.json
 
                     echo "Security scan completed successfully."
+
                     echo "No HIGH or CRITICAL vulnerabilities detected."
                 '''
             }
@@ -220,7 +225,7 @@ pipeline {
                         TAG=${BUILD_NUMBER} \
                         APP_VERSION=1.0.${BUILD_NUMBER} \
                         JWT_SECRET="${STAGING_JWT_SECRET}" \
-                        docker compose up -d taskflow-api
+                        docker compose -p taskflow-staging up -d taskflow-api
 
                         echo "Waiting for staging application to become healthy..."
 
@@ -231,6 +236,7 @@ pipeline {
 
                                 echo
                                 echo "Staging deployment is healthy."
+
                                 exit 0
                             fi
 
@@ -259,7 +265,7 @@ pipeline {
                             TAG=${PREVIOUS_BUILD} \
                             APP_VERSION=1.0.${PREVIOUS_BUILD} \
                             JWT_SECRET="${STAGING_JWT_SECRET}" \
-                            docker compose up -d taskflow-api
+                            docker compose -p taskflow-staging up -d taskflow-api
 
                             echo "Rollback completed."
 
@@ -278,6 +284,7 @@ pipeline {
         // STAGE 6 - RELEASE
         // =====================================================
         stage('Release') {
+
             steps {
                 echo '========== RELEASE STAGE =========='
                 echo "Promoting build ${BUILD_NUMBER} to production..."
@@ -287,9 +294,10 @@ pipeline {
                         credentialsId: 'taskflow-production-jwt',
                         variable: 'PRODUCTION_JWT_SECRET'
                     ),
+
                     gitUsernamePassword(
                         credentialsId: 'github-push-credentials',
-                        gitToolName: 'git'
+                        gitToolName: 'Default'
                     )
                 ]) {
 
@@ -336,15 +344,20 @@ pipeline {
 
                         echo "Pushing Git release tag..."
 
-                        git remote set-url \
+                        git push \
                             origin \
-                            https://github.com/Anshuman3311/TaskFlow-DevOps-Pipeline.git
-
-                        git push origin "${GIT_TAG}"
+                            "${GIT_TAG}"
 
                         echo "Git release tag pushed successfully."
 
                         echo "Deploying release artifact to production..."
+
+                        echo "Removing previous production container if present..."
+
+                        docker rm -f taskflow-api-production \
+                            >/dev/null 2>&1 || true
+
+                        echo "Starting production release..."
 
                         ENV=production \
                         PORT=${PROD_PORT} \
@@ -352,7 +365,7 @@ pipeline {
                         TAG=${RELEASE_TAG} \
                         APP_VERSION=${RELEASE_VERSION} \
                         JWT_SECRET="${PRODUCTION_JWT_SECRET}" \
-                        docker compose up -d taskflow-api
+                        docker compose -p taskflow-production up -d taskflow-api
 
                         echo "Waiting for production application..."
 
@@ -363,6 +376,7 @@ pipeline {
 
                                 echo
                                 echo "Production release is healthy."
+
                                 exit 0
                             fi
 
@@ -374,6 +388,7 @@ pipeline {
                         done
 
                         echo "Production deployment failed."
+
                         exit 1
                     '''
                 }
@@ -397,6 +412,7 @@ pipeline {
                         http://localhost:${PROD_PORT}/health
 
                     echo
+
                     echo "Checking Prometheus metrics endpoint..."
 
                     curl -fsS \
@@ -406,6 +422,7 @@ pipeline {
                         | head -20
 
                     echo
+
                     echo "Checking Prometheus target health..."
 
                     TARGETS=$(curl -fsS \
@@ -416,6 +433,7 @@ pipeline {
                     echo "Prometheus target is UP."
 
                     echo
+
                     echo "Monitoring verification completed successfully."
                 '''
             }
