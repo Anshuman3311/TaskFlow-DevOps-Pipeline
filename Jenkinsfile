@@ -5,15 +5,21 @@ pipeline {
         IMAGE_REPOSITORY = 'localhost:5001/taskflow-api'
         STAGING_PORT = '3000'
         PROD_PORT = '4000'
+
         SONAR_PROJECT_KEY = 'Anshuman3311_TaskFlow-DevOps-Pipeline'
         SONAR_ORGANIZATION = 'anshuman3311'
+
         PATH = "/opt/homebrew/bin:/Users/anshumanjadav/.docker/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+
+        NPM_CONFIG_LOGLEVEL = 'error'
     }
 
     options {
         timestamps()
         disableConcurrentBuilds()
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+        buildDiscarder(
+            logRotator(numToKeepStr: '10')
+        )
     }
 
     stages {
@@ -26,14 +32,17 @@ pipeline {
                     set -e
 
                     echo "Checking required build tools..."
+
                     node --version
                     npm --version
                     docker --version
 
                     echo "Installing dependencies..."
+
                     npm ci
 
                     echo "Running application build..."
+
                     npm run build
 
                     echo "Building Docker image..."
@@ -236,9 +245,7 @@ pipeline {
                             echo "Rollback completed."
 
                         else
-
                             echo "No previous build artifact available for rollback."
-
                         fi
 
                         exit 1
@@ -288,7 +295,7 @@ pipeline {
                             ${IMAGE_REPOSITORY}:${RELEASE_TAG} \
                             >/dev/null
 
-                        echo "Creating Git release tag ${GIT_TAG}..."
+                        echo "Creating local Git release tag ${GIT_TAG}..."
 
                         git config user.name "Jenkins"
                         git config user.email "jenkins@localhost"
@@ -298,14 +305,41 @@ pipeline {
                             -m "Release ${RELEASE_VERSION}" \
                             "${GIT_COMMIT}"
 
-                        echo "Pushing Git release tag..."
+                        echo "Publishing Git release tag through GitHub API..."
 
-                        git remote set-url origin \
-                            "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/Anshuman3311/TaskFlow-DevOps-Pipeline.git"
+                        GITHUB_API_URL="https://api.github.com/repos/Anshuman3311/TaskFlow-DevOps-Pipeline/git/refs"
 
-                        git push origin "${GIT_TAG}"
+                        HTTP_STATUS=$(curl -sS \
+                            -o github-release-response.json \
+                            -w "%{http_code}" \
+                            -X POST \
+                            -H "Accept: application/vnd.github+json" \
+                            -H "Authorization: Bearer ${GIT_PASSWORD}" \
+                            -H "X-GitHub-Api-Version: 2022-11-28" \
+                            "${GITHUB_API_URL}" \
+                            -d "{\"ref\":\"refs/tags/${GIT_TAG}\",\"sha\":\"${GIT_COMMIT}\"}")
 
-                        echo "Git release tag pushed successfully."
+                        if [ "${HTTP_STATUS}" = "201" ]; then
+
+                            echo "GitHub release tag ${GIT_TAG} created successfully."
+
+                        elif [ "${HTTP_STATUS}" = "422" ]; then
+
+                            if grep -q '"already_exists"' github-release-response.json; then
+                                echo "GitHub release tag ${GIT_TAG} already exists."
+                            else
+                                echo "GitHub rejected the release tag request."
+                                cat github-release-response.json
+                                exit 1
+                            fi
+
+                        else
+
+                            echo "GitHub API request failed with HTTP status ${HTTP_STATUS}."
+                            cat github-release-response.json
+                            exit 1
+
+                        fi
 
                         echo "Deploying release artifact to production..."
 
