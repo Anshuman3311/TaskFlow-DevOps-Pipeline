@@ -2,122 +2,401 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME     = 'taskflow-api'
-        STAGING_PORT   = '3000'
-        PROD_PORT      = '4000'
-        SNYK_TOKEN     = credentials('snyk-api-token')     // configure in Jenkins credentials
-        SONAR_TOKEN    = credentials('sonar-api-token')    // configure in Jenkins credentials
+        // Docker Registry
+        IMAGE_REPOSITORY = 'localhost:5001/taskflow-api'
+
+        // Deployment ports
+        STAGING_PORT = '3000'
+        PROD_PORT = '4000'
+
+        // SonarCloud project
+        SONAR_PROJECT_KEY = 'Anshuman3311_TaskFlow-DevOps-Pipeline'
+        SONAR_ORGANIZATION = 'anshuman3311'
     }
 
     options {
         timestamps()
         disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     stages {
 
-        // ---------- 1. BUILD ----------
+        // =========================================================
+        // STAGE 1 - BUILD
+        // =========================================================
         stage('Build') {
             steps {
-                sh 'npm ci'
-                sh 'npm run build'
-                sh 'docker build -t $IMAGE_NAME:$BUILD_NUMBER -t $IMAGE_NAME:latest .'
+                echo '========== BUILD STAGE =========='
+
+                sh '''
+                    set -e
+
+                    echo "Installing dependencies..."
+                    npm ci
+
+                    echo "Running application build..."
+                    npm run build
+
+                    echo "Building Docker image..."
+                    docker build \
+                        -t ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
+                        -t ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER} \
+                        .
+
+                    echo "Pushing versioned build artifact..."
+                    docker push ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+                    docker push ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}
+
+                    echo "Build artifact created:"
+                    echo "  ${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
+                    echo "  ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}"
+                '''
             }
+
             post {
                 success {
-                    echo "Build artefact created: Docker image ${IMAGE_NAME}:${BUILD_NUMBER}"
+                    echo "Build completed successfully. Docker artifact version: 1.0.${BUILD_NUMBER}"
                 }
             }
         }
 
-        // ---------- 2. TEST ----------
+
+        // =========================================================
+        // STAGE 2 - TEST
+        // =========================================================
         stage('Test') {
             steps {
-                sh 'npm test'
+                echo '========== TEST STAGE =========='
+
+                sh '''
+                    set -e
+
+                    echo "Running automated test suite..."
+                    NODE_ENV=test npm test
+                '''
             }
+
             post {
                 always {
-                    junit 'reports/junit.xml'
-                    archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                    junit(
+                        testResults: 'reports/junit.xml',
+                        allowEmptyResults: false
+                    )
+
+                    archiveArtifacts(
+                        artifacts: 'coverage/**',
+                        allowEmptyArchive: true,
+                        fingerprint: true
+                    )
                 }
             }
         }
 
-        // ---------- 3. CODE QUALITY ----------
+
+        // =========================================================
+        // STAGE 3 - CODE QUALITY
+        // =========================================================
         stage('Code Quality') {
             steps {
-                sh 'npm run lint'
+                echo '========== CODE QUALITY STAGE =========='
+
+                sh '''
+                    set -e
+
+                    echo "Running ESLint..."
+                    npm run lint
+                '''
+
                 withSonarQubeEnv('SonarQube') {
-                    sh 'npx sonar-scanner -Dsonar.login=$SONAR_TOKEN'
+                    sh '''
+                        set -e
+
+                        echo "Running SonarCloud analysis..."
+
+                        sonar-scanner \
+                            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                            -Dsonar.organization=${SONAR_ORGANIZATION} \
+                            -Dsonar.qualitygate.wait=true \
+                            -Dsonar.qualitygate.timeout=300
+                    '''
                 }
             }
         }
 
-        // ---------- 4. SECURITY ----------
+
+        // =========================================================
+        // STAGE 4 - SECURITY
+        // =========================================================
         stage('Security') {
             steps {
-                // Dependency vulnerability scan (Node.js built-in)
-                sh 'npm audit --json > npm-audit-report.json || true'
+                echo '========== SECURITY STAGE =========='
 
-                // Deeper SCA scan with Snyk (or swap for Trivy image scan)
-                sh 'npx snyk test --json > snyk-report.json || true'
-                sh 'npx snyk container test $IMAGE_NAME:latest --json > snyk-container-report.json || true'
+                sh '''
+                    set -e
+
+                    echo "Running npm dependency security audit..."
+
+                    npm audit \
+                        --audit-level=high \
+                        --json > npm-audit-report.json
+
+                    echo "Running Trivy container vulnerability scan..."
+
+                    trivy image \
+                        --scanners vuln \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
+                        --format json \
+                        --output trivy-report.json
+
+                    echo "Security scan completed successfully."
+                    echo "No HIGH or CRITICAL vulnerabilities detected."
+                '''
             }
+
             post {
                 always {
-                    archiveArtifacts artifacts: '*-report.json', allowEmptyArchive: true
+                    archiveArtifacts(
+                        artifacts: 'npm-audit-report.json,trivy-report.json',
+                        allowEmptyArchive: true,
+                        fingerprint: true
+                    )
                 }
             }
         }
 
-        // ---------- 5. DEPLOY (to staging) ----------
+
+        // =========================================================
+        // STAGE 5 - DEPLOY
+        // =========================================================
         stage('Deploy') {
             steps {
-                sh 'ENV=staging PORT=$STAGING_PORT TAG=$BUILD_NUMBER docker compose up -d --build'
-                sh 'sleep 5'
-                sh 'curl -f http://localhost:$STAGING_PORT/health'
+                echo '========== DEPLOY STAGE =========='
+                echo "Deploying build ${BUILD_NUMBER} to staging..."
+
+                withCredentials([
+                    string(
+                        credentialsId: 'taskflow-staging-jwt',
+                        variable: 'STAGING_JWT_SECRET'
+                    )
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "Pulling exact tested build artifact..."
+                        docker pull ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+
+                        echo "Deploying to staging..."
+                        ENV=staging \
+                        PORT=${STAGING_PORT} \
+                        IMAGE_NAME=${IMAGE_REPOSITORY} \
+                        TAG=${BUILD_NUMBER} \
+                        APP_VERSION=1.0.${BUILD_NUMBER} \
+                        JWT_SECRET="${STAGING_JWT_SECRET}" \
+                        docker compose up -d taskflow-api
+
+                        echo "Waiting for staging application to become healthy..."
+
+                        for i in $(seq 1 12); do
+                            if curl -fsS http://localhost:${STAGING_PORT}/health; then
+                                echo
+                                echo "Staging deployment is healthy."
+                                exit 0
+                            fi
+
+                            echo "Health check attempt ${i}/12 failed. Waiting 5 seconds..."
+                            sleep 5
+                        done
+
+                        echo "Staging deployment failed."
+
+                        echo "Attempting rollback..."
+
+                        if docker image inspect ${IMAGE_REPOSITORY}:1.0.$((BUILD_NUMBER - 1)) >/dev/null 2>&1; then
+
+                            ENV=staging \
+                            PORT=${STAGING_PORT} \
+                            IMAGE_NAME=${IMAGE_REPOSITORY} \
+                            TAG=1.0.$((BUILD_NUMBER - 1)) \
+                            APP_VERSION=1.0.$((BUILD_NUMBER - 1)) \
+                            JWT_SECRET="${STAGING_JWT_SECRET}" \
+                            docker compose up -d taskflow-api
+
+                            echo "Rollback completed."
+                        fi
+
+                        exit 1
+                    '''
+                }
             }
         }
 
-        // ---------- 6. RELEASE (promote to production) ----------
+
+        // =========================================================
+        // STAGE 6 - RELEASE
+        // =========================================================
         stage('Release') {
             when {
                 branch 'main'
             }
+
             steps {
-                sh 'docker tag $IMAGE_NAME:$BUILD_NUMBER $IMAGE_NAME:prod-$BUILD_NUMBER'
-                sh "git tag v1.0.${BUILD_NUMBER}"
-                sh 'ENV=production PORT=$PROD_PORT TAG=prod-$BUILD_NUMBER docker compose up -d --build'
-                sh 'sleep 5'
-                sh 'curl -f http://localhost:$PROD_PORT/health'
+                echo '========== RELEASE STAGE =========='
+                echo "Promoting build ${BUILD_NUMBER} to production..."
+
+                withCredentials([
+                    string(
+                        credentialsId: 'taskflow-production-jwt',
+                        variable: 'PRODUCTION_JWT_SECRET'
+                    ),
+                    usernamePassword(
+                        credentialsId: 'github-push-credentials',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
+                    )
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        RELEASE_VERSION="1.0.${BUILD_NUMBER}"
+                        RELEASE_TAG="release-${RELEASE_VERSION}"
+                        GIT_TAG="v${RELEASE_VERSION}"
+
+                        echo "Promoting the exact tested image..."
+                        echo "Source: ${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
+                        echo "Release: ${IMAGE_REPOSITORY}:${RELEASE_TAG}"
+
+                        docker pull ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+
+                        docker tag \
+                            ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
+                            ${IMAGE_REPOSITORY}:${RELEASE_TAG}
+
+                        docker push ${IMAGE_REPOSITORY}:${RELEASE_TAG}
+
+                        echo "Verifying release image..."
+
+                        docker image inspect \
+                            ${IMAGE_REPOSITORY}:${RELEASE_TAG} >/dev/null
+
+                        echo "Creating Git release tag ${GIT_TAG}..."
+
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@localhost"
+
+                        git tag -a "${GIT_TAG}" \
+                            -m "Release ${RELEASE_VERSION}" \
+                            "${GIT_COMMIT}"
+
+                        echo "Pushing Git release tag..."
+
+                        git push \
+                            https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/Anshuman3311/TaskFlow-DevOps-Pipeline.git \
+                            "${GIT_TAG}"
+
+                        echo "Deploying release artifact to production..."
+
+                        ENV=production \
+                        PORT=${PROD_PORT} \
+                        IMAGE_NAME=${IMAGE_REPOSITORY} \
+                        TAG=${RELEASE_TAG} \
+                        APP_VERSION=${RELEASE_VERSION} \
+                        JWT_SECRET="${PRODUCTION_JWT_SECRET}" \
+                        docker compose up -d taskflow-api
+
+                        echo "Waiting for production application..."
+
+                        for i in $(seq 1 12); do
+                            if curl -fsS http://localhost:${PROD_PORT}/health; then
+                                echo
+                                echo "Production release is healthy."
+                                exit 0
+                            fi
+
+                            echo "Production health check attempt ${i}/12 failed. Waiting 5 seconds..."
+                            sleep 5
+                        done
+
+                        echo "Production deployment failed."
+                        exit 1
+                    '''
+                }
             }
         }
 
-        // ---------- 7. MONITORING & ALERTING ----------
+
+        // =========================================================
+        // STAGE 7 - MONITORING
+        // =========================================================
         stage('Monitoring') {
             steps {
-                // Verify the /metrics endpoint is live and scrape-able
-                sh 'curl -f http://localhost:$PROD_PORT/metrics'
-                // Simulated alert hook -- replace with a real Datadog/New Relic webhook call
+                echo '========== MONITORING STAGE =========='
+
                 sh '''
-                  STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$PROD_PORT/health)
-                  if [ "$STATUS" != "200" ]; then
-                    echo "ALERT: production health check failed with status $STATUS"
-                    exit 1
-                  else
-                    echo "Production is healthy (status $STATUS). Metrics available at /metrics."
-                  fi
+                    set -e
+
+                    echo "Checking production health endpoint..."
+                    curl -fsS http://localhost:${PROD_PORT}/health
+
+                    echo
+                    echo "Checking Prometheus metrics endpoint..."
+                    curl -fsS http://localhost:${PROD_PORT}/metrics | \
+                        grep -E "http_requests_total|nodejs_eventloop_lag_p99_seconds" | \
+                        head -20
+
+                    echo
+                    echo "Checking Prometheus target health..."
+
+                    TARGETS=$(curl -fsS http://localhost:9090/api/v1/targets)
+
+                    echo "$TARGETS" | grep -q '"health":"up"'
+
+                    echo "Prometheus target is UP."
+
+                    echo
+                    echo "Monitoring verification completed successfully."
                 '''
             }
         }
     }
 
+
+    // =============================================================
+    // PIPELINE POST ACTIONS
+    // =============================================================
     post {
-        failure {
-            echo 'Pipeline failed - see stage logs above for details.'
+
+        success {
+            echo '======================================================'
+            echo 'TaskFlow DevOps Pipeline completed successfully.'
+            echo "Build: ${BUILD_NUMBER}"
+            echo "Release: 1.0.${BUILD_NUMBER}"
+            echo 'All seven DevOps stages completed successfully.'
+            echo '======================================================'
         }
+
+        failure {
+            echo '======================================================'
+            echo 'TaskFlow DevOps Pipeline FAILED.'
+            echo 'Review the failed stage and console output.'
+            echo '======================================================'
+        }
+
         always {
-            cleanWs()
+            archiveArtifacts(
+                artifacts: '*.json',
+                allowEmptyArchive: true,
+                fingerprint: true
+            )
+
+            cleanWs(
+                deleteDirs: true,
+                disableDeferredWipeout: true
+            )
         }
     }
 }
