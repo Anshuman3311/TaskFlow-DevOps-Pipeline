@@ -44,17 +44,14 @@ pipeline {
                     set -e
 
                     echo "Checking required build tools..."
-
                     node --version
                     npm --version
                     docker --version
 
                     echo "Installing dependencies..."
-
                     npm ci
 
                     echo "Running application build..."
-
                     npm run build
 
                     echo "Building Docker image..."
@@ -70,7 +67,6 @@ pipeline {
                     docker push ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}
 
                     echo "Build artifact created:"
-
                     echo "  ${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
                     echo "  ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}"
                 '''
@@ -178,7 +174,6 @@ pipeline {
                         --output trivy-report.json
 
                     echo "Security scan completed successfully."
-
                     echo "No HIGH or CRITICAL vulnerabilities detected."
                 '''
             }
@@ -225,7 +220,9 @@ pipeline {
                         TAG=${BUILD_NUMBER} \
                         APP_VERSION=1.0.${BUILD_NUMBER} \
                         JWT_SECRET="${STAGING_JWT_SECRET}" \
-                        docker compose -p taskflow-staging up -d taskflow-api
+                        docker compose \
+                            -p taskflow-staging \
+                            up -d taskflow-api
 
                         echo "Waiting for staging application to become healthy..."
 
@@ -236,7 +233,6 @@ pipeline {
 
                                 echo
                                 echo "Staging deployment is healthy."
-
                                 exit 0
                             fi
 
@@ -265,7 +261,9 @@ pipeline {
                             TAG=${PREVIOUS_BUILD} \
                             APP_VERSION=1.0.${PREVIOUS_BUILD} \
                             JWT_SECRET="${STAGING_JWT_SECRET}" \
-                            docker compose -p taskflow-staging up -d taskflow-api
+                            docker compose \
+                                -p taskflow-staging \
+                                up -d taskflow-api
 
                             echo "Rollback completed."
 
@@ -284,7 +282,6 @@ pipeline {
         // STAGE 6 - RELEASE
         // =====================================================
         stage('Release') {
-
             steps {
                 echo '========== RELEASE STAGE =========='
                 echo "Promoting build ${BUILD_NUMBER} to production..."
@@ -293,104 +290,106 @@ pipeline {
                     string(
                         credentialsId: 'taskflow-production-jwt',
                         variable: 'PRODUCTION_JWT_SECRET'
-                    ),
+                    )
+                ]) {
 
                     gitUsernamePassword(
                         credentialsId: 'github-push-credentials',
                         gitToolName: 'Default'
-                    )
-                ]) {
+                    ) {
 
-                    sh '''
-                        set -e
+                        sh '''
+                            set -e
 
-                        RELEASE_VERSION="1.0.${BUILD_NUMBER}"
-                        RELEASE_TAG="release-${RELEASE_VERSION}"
-                        GIT_TAG="v${RELEASE_VERSION}"
+                            RELEASE_VERSION="1.0.${BUILD_NUMBER}"
+                            RELEASE_TAG="release-${RELEASE_VERSION}"
+                            GIT_TAG="v${RELEASE_VERSION}"
 
-                        echo "Promoting the exact tested image..."
+                            echo "Promoting the exact tested image..."
 
-                        echo "Source image:"
-                        echo "${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
+                            echo "Source image:"
+                            echo "${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
 
-                        echo "Release image:"
-                        echo "${IMAGE_REPOSITORY}:${RELEASE_TAG}"
+                            echo "Release image:"
+                            echo "${IMAGE_REPOSITORY}:${RELEASE_TAG}"
 
-                        docker pull \
-                            ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+                            docker pull \
+                                ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
 
-                        docker tag \
-                            ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
-                            ${IMAGE_REPOSITORY}:${RELEASE_TAG}
+                            docker tag \
+                                ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
+                                ${IMAGE_REPOSITORY}:${RELEASE_TAG}
 
-                        docker push \
-                            ${IMAGE_REPOSITORY}:${RELEASE_TAG}
+                            docker push \
+                                ${IMAGE_REPOSITORY}:${RELEASE_TAG}
 
-                        echo "Release image created successfully."
+                            echo "Release image created successfully."
 
-                        docker image inspect \
-                            ${IMAGE_REPOSITORY}:${RELEASE_TAG} \
-                            >/dev/null
+                            docker image inspect \
+                                ${IMAGE_REPOSITORY}:${RELEASE_TAG} \
+                                >/dev/null
 
-                        echo "Creating Git release tag ${GIT_TAG}..."
+                            echo "Creating Git release tag ${GIT_TAG}..."
 
-                        git config user.name "Jenkins"
-                        git config user.email "jenkins@localhost"
+                            git config user.name "Jenkins"
+                            git config user.email "jenkins@localhost"
 
-                        git tag -a \
-                            "${GIT_TAG}" \
-                            -m "Release ${RELEASE_VERSION}" \
-                            "${GIT_COMMIT}"
+                            git tag -a \
+                                "${GIT_TAG}" \
+                                -m "Release ${RELEASE_VERSION}" \
+                                "${GIT_COMMIT}"
 
-                        echo "Pushing Git release tag..."
+                            echo "Pushing Git release tag..."
 
-                        git push \
-                            origin \
-                            "${GIT_TAG}"
+                            git remote set-url \
+                                origin \
+                                https://github.com/Anshuman3311/TaskFlow-DevOps-Pipeline.git
 
-                        echo "Git release tag pushed successfully."
+                            git push \
+                                origin \
+                                "${GIT_TAG}"
 
-                        echo "Deploying release artifact to production..."
+                            echo "Git release tag pushed successfully."
 
-                        echo "Removing previous production container if present..."
+                            echo "Deploying release artifact to production..."
 
-                        docker rm -f taskflow-api-production \
-                            >/dev/null 2>&1 || true
+                            docker rm -f \
+                                taskflow-api-production \
+                                >/dev/null 2>&1 || true
 
-                        echo "Starting production release..."
+                            ENV=production \
+                            PORT=${PROD_PORT} \
+                            IMAGE_NAME=${IMAGE_REPOSITORY} \
+                            TAG=${RELEASE_TAG} \
+                            APP_VERSION=${RELEASE_VERSION} \
+                            JWT_SECRET="${PRODUCTION_JWT_SECRET}" \
+                            docker compose \
+                                -p taskflow-production \
+                                up -d taskflow-api
 
-                        ENV=production \
-                        PORT=${PROD_PORT} \
-                        IMAGE_NAME=${IMAGE_REPOSITORY} \
-                        TAG=${RELEASE_TAG} \
-                        APP_VERSION=${RELEASE_VERSION} \
-                        JWT_SECRET="${PRODUCTION_JWT_SECRET}" \
-                        docker compose -p taskflow-production up -d taskflow-api
+                            echo "Waiting for production application..."
 
-                        echo "Waiting for production application..."
+                            for i in $(seq 1 12); do
 
-                        for i in $(seq 1 12); do
+                                if curl -fsS \
+                                    http://localhost:${PROD_PORT}/health; then
 
-                            if curl -fsS \
-                                http://localhost:${PROD_PORT}/health; then
+                                    echo
+                                    echo "Production release is healthy."
+                                    exit 0
+                                fi
 
                                 echo
-                                echo "Production release is healthy."
+                                echo "Production health check attempt ${i}/12 failed."
+                                echo "Waiting 5 seconds..."
 
-                                exit 0
-                            fi
+                                sleep 5
+                            done
 
-                            echo
-                            echo "Production health check attempt ${i}/12 failed."
-                            echo "Waiting 5 seconds..."
-
-                            sleep 5
-                        done
-
-                        echo "Production deployment failed."
-
-                        exit 1
-                    '''
+                            echo "Production deployment failed."
+                            exit 1
+                        '''
+                    }
                 }
             }
         }
@@ -412,7 +411,6 @@ pipeline {
                         http://localhost:${PROD_PORT}/health
 
                     echo
-
                     echo "Checking Prometheus metrics endpoint..."
 
                     curl -fsS \
@@ -422,18 +420,31 @@ pipeline {
                         | head -20
 
                     echo
+                    echo "Connecting Prometheus to production Docker network..."
 
+                    docker network connect \
+                        taskflow-production_default \
+                        taskflow-prometheus \
+                        2>/dev/null || true
+
+                    echo "Waiting for Prometheus to discover the production target..."
+
+                    sleep 20
+
+                    echo
                     echo "Checking Prometheus target health..."
 
                     TARGETS=$(curl -fsS \
                         http://localhost:9090/api/v1/targets)
 
+                    echo "$TARGETS"
+
                     echo "$TARGETS" | grep -q '"health":"up"'
 
+                    echo
                     echo "Prometheus target is UP."
 
                     echo
-
                     echo "Monitoring verification completed successfully."
                 '''
             }
