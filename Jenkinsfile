@@ -2,26 +2,11 @@ pipeline {
     agent any
 
     environment {
-        // =====================================================
-        // Application / Docker configuration
-        // =====================================================
         IMAGE_REPOSITORY = 'localhost:5001/taskflow-api'
-
         STAGING_PORT = '3000'
         PROD_PORT = '4000'
-
-        // =====================================================
-        // SonarCloud configuration
-        // =====================================================
         SONAR_PROJECT_KEY = 'Anshuman3311_TaskFlow-DevOps-Pipeline'
         SONAR_ORGANIZATION = 'anshuman3311'
-
-        // =====================================================
-        // macOS Jenkins PATH
-        //
-        // Jenkins does not inherit the interactive Terminal PATH.
-        // Explicitly expose Node/npm, Docker Desktop CLI and Trivy.
-        // =====================================================
         PATH = "/opt/homebrew/bin:/Users/anshumanjadav/.docker/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     }
 
@@ -33,9 +18,6 @@ pipeline {
 
     stages {
 
-        // =====================================================
-        // STAGE 1 - BUILD
-        // =====================================================
         stage('Build') {
             steps {
                 echo '========== BUILD STAGE =========='
@@ -63,8 +45,11 @@ pipeline {
 
                     echo "Pushing versioned build artifact..."
 
-                    docker push ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
-                    docker push ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}
+                    docker push \
+                        ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+
+                    docker push \
+                        ${IMAGE_REPOSITORY}:1.0.${BUILD_NUMBER}
 
                     echo "Build artifact created:"
                     echo "  ${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
@@ -80,10 +65,6 @@ pipeline {
             }
         }
 
-
-        // =====================================================
-        // STAGE 2 - TEST
-        // =====================================================
         stage('Test') {
             steps {
                 echo '========== TEST STAGE =========='
@@ -113,10 +94,6 @@ pipeline {
             }
         }
 
-
-        // =====================================================
-        // STAGE 3 - CODE QUALITY
-        // =====================================================
         stage('Code Quality') {
             steps {
                 echo '========== CODE QUALITY STAGE =========='
@@ -145,10 +122,6 @@ pipeline {
             }
         }
 
-
-        // =====================================================
-        // STAGE 4 - SECURITY
-        // =====================================================
         stage('Security') {
             steps {
                 echo '========== SECURITY STAGE =========='
@@ -189,10 +162,6 @@ pipeline {
             }
         }
 
-
-        // =====================================================
-        // STAGE 5 - DEPLOY
-        // =====================================================
         stage('Deploy') {
             steps {
                 echo '========== DEPLOY STAGE =========='
@@ -204,13 +173,13 @@ pipeline {
                         variable: 'STAGING_JWT_SECRET'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
                         echo "Pulling exact tested build artifact..."
 
-                        docker pull ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+                        docker pull \
+                            ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
 
                         echo "Deploying to staging..."
 
@@ -244,7 +213,6 @@ pipeline {
                         done
 
                         echo "Staging deployment failed."
-
                         echo "Attempting rollback..."
 
                         PREVIOUS_BUILD=$((BUILD_NUMBER - 1))
@@ -268,7 +236,9 @@ pipeline {
                             echo "Rollback completed."
 
                         else
+
                             echo "No previous build artifact available for rollback."
+
                         fi
 
                         exit 1
@@ -277,10 +247,6 @@ pipeline {
             }
         }
 
-
-        // =====================================================
-        // STAGE 6 - RELEASE
-        // =====================================================
         stage('Release') {
             steps {
                 echo '========== RELEASE STAGE =========='
@@ -290,114 +256,99 @@ pipeline {
                     string(
                         credentialsId: 'taskflow-production-jwt',
                         variable: 'PRODUCTION_JWT_SECRET'
+                    ),
+                    usernamePassword(
+                        credentialsId: 'github-push-credentials',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
                     )
                 ]) {
+                    sh '''
+                        set -e
 
-                    gitUsernamePassword(
-                        credentialsId: 'github-push-credentials',
-                        gitToolName: 'Default'
-                    ) {
+                        RELEASE_VERSION="1.0.${BUILD_NUMBER}"
+                        RELEASE_TAG="release-${RELEASE_VERSION}"
+                        GIT_TAG="v${RELEASE_VERSION}"
 
-                        sh '''
-                            set -e
+                        echo "Promoting the exact tested image..."
 
-                            RELEASE_VERSION="1.0.${BUILD_NUMBER}"
-                            RELEASE_TAG="release-${RELEASE_VERSION}"
-                            GIT_TAG="v${RELEASE_VERSION}"
+                        docker pull \
+                            ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
 
-                            echo "Promoting the exact tested image..."
+                        docker tag \
+                            ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
+                            ${IMAGE_REPOSITORY}:${RELEASE_TAG}
 
-                            echo "Source image:"
-                            echo "${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
+                        docker push \
+                            ${IMAGE_REPOSITORY}:${RELEASE_TAG}
 
-                            echo "Release image:"
-                            echo "${IMAGE_REPOSITORY}:${RELEASE_TAG}"
+                        echo "Release image created successfully."
 
-                            docker pull \
-                                ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+                        docker image inspect \
+                            ${IMAGE_REPOSITORY}:${RELEASE_TAG} \
+                            >/dev/null
 
-                            docker tag \
-                                ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
-                                ${IMAGE_REPOSITORY}:${RELEASE_TAG}
+                        echo "Creating Git release tag ${GIT_TAG}..."
 
-                            docker push \
-                                ${IMAGE_REPOSITORY}:${RELEASE_TAG}
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@localhost"
 
-                            echo "Release image created successfully."
+                        git tag -a \
+                            "${GIT_TAG}" \
+                            -m "Release ${RELEASE_VERSION}" \
+                            "${GIT_COMMIT}"
 
-                            docker image inspect \
-                                ${IMAGE_REPOSITORY}:${RELEASE_TAG} \
-                                >/dev/null
+                        echo "Pushing Git release tag..."
 
-                            echo "Creating Git release tag ${GIT_TAG}..."
+                        git remote set-url origin \
+                            "https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/Anshuman3311/TaskFlow-DevOps-Pipeline.git"
 
-                            git config user.name "Jenkins"
-                            git config user.email "jenkins@localhost"
+                        git push origin "${GIT_TAG}"
 
-                            git tag -a \
-                                "${GIT_TAG}" \
-                                -m "Release ${RELEASE_VERSION}" \
-                                "${GIT_COMMIT}"
+                        echo "Git release tag pushed successfully."
 
-                            echo "Pushing Git release tag..."
+                        echo "Deploying release artifact to production..."
 
-                            git remote set-url \
-                                origin \
-                                https://github.com/Anshuman3311/TaskFlow-DevOps-Pipeline.git
+                        docker rm -f \
+                            taskflow-api-production \
+                            >/dev/null 2>&1 || true
 
-                            git push \
-                                origin \
-                                "${GIT_TAG}"
+                        ENV=production \
+                        PORT=${PROD_PORT} \
+                        IMAGE_NAME=${IMAGE_REPOSITORY} \
+                        TAG=${RELEASE_TAG} \
+                        APP_VERSION=${RELEASE_VERSION} \
+                        JWT_SECRET="${PRODUCTION_JWT_SECRET}" \
+                        docker compose \
+                            -p taskflow-production \
+                            up -d taskflow-api
 
-                            echo "Git release tag pushed successfully."
+                        echo "Waiting for production application..."
 
-                            echo "Deploying release artifact to production..."
+                        for i in $(seq 1 12); do
 
-                            docker rm -f \
-                                taskflow-api-production \
-                                >/dev/null 2>&1 || true
-
-                            ENV=production \
-                            PORT=${PROD_PORT} \
-                            IMAGE_NAME=${IMAGE_REPOSITORY} \
-                            TAG=${RELEASE_TAG} \
-                            APP_VERSION=${RELEASE_VERSION} \
-                            JWT_SECRET="${PRODUCTION_JWT_SECRET}" \
-                            docker compose \
-                                -p taskflow-production \
-                                up -d taskflow-api
-
-                            echo "Waiting for production application..."
-
-                            for i in $(seq 1 12); do
-
-                                if curl -fsS \
-                                    http://localhost:${PROD_PORT}/health; then
-
-                                    echo
-                                    echo "Production release is healthy."
-                                    exit 0
-                                fi
+                            if curl -fsS \
+                                http://localhost:${PROD_PORT}/health; then
 
                                 echo
-                                echo "Production health check attempt ${i}/12 failed."
-                                echo "Waiting 5 seconds..."
+                                echo "Production release is healthy."
+                                exit 0
+                            fi
 
-                                sleep 5
-                            done
+                            echo
+                            echo "Production health check attempt ${i}/12 failed."
+                            echo "Waiting 5 seconds..."
 
-                            echo "Production deployment failed."
-                            exit 1
-                        '''
-                    }
+                            sleep 5
+                        done
+
+                        echo "Production deployment failed."
+                        exit 1
+                    '''
                 }
             }
         }
 
-
-        // =====================================================
-        // STAGE 7 - MONITORING
-        // =====================================================
         stage('Monitoring') {
             steps {
                 echo '========== MONITORING STAGE =========='
@@ -411,6 +362,7 @@ pipeline {
                         http://localhost:${PROD_PORT}/health
 
                     echo
+
                     echo "Checking Prometheus metrics endpoint..."
 
                     curl -fsS \
@@ -420,6 +372,7 @@ pipeline {
                         | head -20
 
                     echo
+
                     echo "Connecting Prometheus to production Docker network..."
 
                     docker network connect \
@@ -432,6 +385,7 @@ pipeline {
                     sleep 20
 
                     echo
+
                     echo "Checking Prometheus target health..."
 
                     TARGETS=$(curl -fsS \
@@ -451,10 +405,6 @@ pipeline {
         }
     }
 
-
-    // =========================================================
-    // PIPELINE POST ACTIONS
-    // =========================================================
     post {
 
         success {
