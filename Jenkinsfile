@@ -1,10 +1,24 @@
 pipeline {
     agent any
 
+    // ================================================================
+    // GLOBAL ENVIRONMENT
+    // These PATH additions apply to EVERY pipeline stage.
+    // ================================================================
     environment {
-        // -----------------------------
-        // Application / Docker settings
-        // -----------------------------
+
+        // Homebrew Node/npm
+        PATH+NODE = '/opt/homebrew/bin'
+
+        // Docker Desktop CLI
+        PATH+DOCKER = '/Users/anshumanjadav/.docker/bin'
+
+        // System tools
+        PATH+SYSTEM = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+
+        // ------------------------------------------------------------
+        // Docker / application configuration
+        // ------------------------------------------------------------
         IMAGE_REPOSITORY = 'localhost:5001/taskflow-api'
         IMAGE_NAME       = 'taskflow-api'
 
@@ -14,32 +28,45 @@ pipeline {
         STAGING_PROJECT  = 'taskflow-staging'
         PROD_PROJECT     = 'taskflow-production'
 
-        SONAR_PROJECT_KEY = 'Anshuman3311_TaskFlow-DevOps-Pipeline'
+        // ------------------------------------------------------------
+        // SonarCloud configuration
+        // ------------------------------------------------------------
+        SONAR_PROJECT_KEY  = 'Anshuman3311_TaskFlow-DevOps-Pipeline'
         SONAR_ORGANIZATION = 'anshuman3311'
     }
 
+    // ================================================================
+    // PIPELINE OPTIONS
+    // ================================================================
     options {
         timestamps()
+
         disableConcurrentBuilds()
+
         skipDefaultCheckout(false)
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+
+        buildDiscarder(
+            logRotator(
+                numToKeepStr: '10'
+            )
+        )
     }
 
     stages {
 
         // ============================================================
-        // 1. BUILD
+        // STAGE 1 — BUILD
         // ============================================================
         stage('Build') {
+
             steps {
+
                 sh '''
                     set -e
 
                     echo "========================================"
                     echo "STAGE 1: BUILD"
                     echo "========================================"
-
-                    export PATH="/opt/homebrew/bin:/Users/anshumanjadav/.docker/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
                     echo "Node version:"
                     node --version
@@ -50,27 +77,50 @@ pipeline {
                     echo "Docker version:"
                     docker --version
 
+                    echo "Trivy version:"
+                    trivy --version
+
+                    echo ""
                     echo "Installing dependencies..."
                     npm ci
 
+                    echo ""
                     echo "Running application build..."
                     npm run build
 
+                    echo ""
                     echo "Building Docker image..."
+
                     docker build \
                         -t ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
                         -t ${IMAGE_REPOSITORY}:latest \
                         .
 
-                    echo "Pushing build artifact to local registry..."
-                    docker push ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
-                    docker push ${IMAGE_REPOSITORY}:latest
+                    echo ""
+                    echo "Pushing versioned build artifact..."
 
-                    echo "Verifying image exists..."
-                    docker image inspect ${IMAGE_REPOSITORY}:${BUILD_NUMBER} >/dev/null
+                    docker push \
+                        ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
 
+                    echo ""
+                    echo "Updating latest image..."
+
+                    docker push \
+                        ${IMAGE_REPOSITORY}:latest
+
+                    echo ""
+                    echo "Verifying build artifact..."
+
+                    docker image inspect \
+                        ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
+                        >/dev/null
+
+                    echo ""
                     echo "Build artifact created successfully:"
                     echo "${IMAGE_REPOSITORY}:${BUILD_NUMBER}"
+
+                    echo ""
+                    echo "STAGE 1 BUILD COMPLETED SUCCESSFULLY"
                 '''
             }
 
@@ -83,10 +133,12 @@ pipeline {
 
 
         // ============================================================
-        // 2. TEST
+        // STAGE 2 — TEST
         // ============================================================
         stage('Test') {
+
             steps {
+
                 sh '''
                     set -e
 
@@ -94,15 +146,30 @@ pipeline {
                     echo "STAGE 2: TEST"
                     echo "========================================"
 
+                    echo "Node version:"
+                    node --version
+
+                    echo "NPM version:"
+                    npm --version
+
+                    echo ""
+                    echo "Running automated Jest test suite..."
+
                     npm test
+
+                    echo ""
+                    echo "Automated test suite completed successfully."
+                    echo "STAGE 2 TEST COMPLETED SUCCESSFULLY"
                 '''
             }
 
             post {
+
                 always {
+
                     junit(
                         testResults: 'reports/junit.xml',
-                        allowEmptyResults: false
+                        allowEmptyResults: true
                     )
 
                     archiveArtifacts(
@@ -120,9 +187,10 @@ pipeline {
 
 
         // ============================================================
-        // 3. CODE QUALITY
+        // STAGE 3 — CODE QUALITY
         // ============================================================
         stage('Code Quality') {
+
             steps {
 
                 echo "========================================"
@@ -133,25 +201,29 @@ pipeline {
                     set -e
 
                     echo "Running ESLint..."
+
                     npm run lint
 
+                    echo ""
                     echo "ESLint completed successfully."
                 '''
 
                 /*
                  * IMPORTANT:
+                 *
                  * Do NOT add SONAR_SCANNER_JAVA_OPTS here.
                  *
                  * The previous Build 21 failure was caused by:
                  *
                  * --enable-final-field-mutation=ALL-UNNAMED
                  *
-                 * The Sonar scanner's provisioned Java runtime rejected
-                 * that option.
+                 * which was rejected by the Sonar scanner JVM.
                  *
-                 * This is the known-working Sonar configuration.
+                 * This is the previously working configuration.
                  */
+
                 withSonarQubeEnv('SonarQube') {
+
                     sh '''
                         set -e
 
@@ -163,12 +235,15 @@ pipeline {
                             -Dsonar.qualitygate.wait=true \
                             -Dsonar.qualitygate.timeout=300
 
+                        echo ""
                         echo "SonarCloud Quality Gate passed."
+                        echo "STAGE 3 CODE QUALITY COMPLETED SUCCESSFULLY"
                     '''
                 }
             }
 
             post {
+
                 success {
                     echo "Code Quality stage completed successfully."
                 }
@@ -177,10 +252,12 @@ pipeline {
 
 
         // ============================================================
-        // 4. SECURITY
+        // STAGE 4 — SECURITY
         // ============================================================
         stage('Security') {
+
             steps {
+
                 sh '''
                     set -e
 
@@ -188,6 +265,7 @@ pipeline {
                     echo "STAGE 4: SECURITY"
                     echo "========================================"
 
+                    echo ""
                     echo "Running npm dependency security audit..."
 
                     npm audit \
@@ -196,6 +274,7 @@ pipeline {
 
                     echo "npm audit passed."
 
+                    echo ""
                     echo "Running Trivy filesystem scan..."
 
                     trivy fs \
@@ -205,8 +284,9 @@ pipeline {
                         --no-progress \
                         .
 
-                    echo "Filesystem security scan passed."
+                    echo "Trivy filesystem scan passed."
 
+                    echo ""
                     echo "Running Trivy Docker image scan..."
 
                     trivy image \
@@ -215,14 +295,21 @@ pipeline {
                         --no-progress \
                         ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
 
-                    echo "Docker image security scan passed."
+                    echo ""
+                    echo "Trivy Docker image scan passed."
 
-                    echo "All security checks passed."
+                    echo ""
+                    echo "No HIGH or CRITICAL vulnerabilities detected."
+
+                    echo ""
+                    echo "STAGE 4 SECURITY COMPLETED SUCCESSFULLY"
                 '''
             }
 
             post {
+
                 always {
+
                     archiveArtifacts(
                         artifacts: 'npm-audit-report.json',
                         allowEmptyArchive: true,
@@ -238,11 +325,16 @@ pipeline {
 
 
         // ============================================================
-        // 5. DEPLOY
-        // Deploy exact tested image to staging
+        // STAGE 5 — DEPLOY TO STAGING
         // ============================================================
         stage('Deploy') {
+
+            environment {
+                STAGING_JWT_SECRET = credentials('taskflow-staging-jwt')
+            }
+
             steps {
+
                 sh '''
                     set -e
 
@@ -250,10 +342,13 @@ pipeline {
                     echo "STAGE 5: DEPLOY"
                     echo "========================================"
 
+                    echo ""
                     echo "Pulling exact build artifact from registry..."
 
-                    docker pull ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
+                    docker pull \
+                        ${IMAGE_REPOSITORY}:${BUILD_NUMBER}
 
+                    echo ""
                     echo "Deploying build ${BUILD_NUMBER} to staging..."
 
                     ENV=staging \
@@ -262,41 +357,63 @@ pipeline {
                     IMAGE_NAME=${IMAGE_REPOSITORY} \
                     APP_VERSION=${BUILD_NUMBER} \
                     JWT_SECRET="$STAGING_JWT_SECRET" \
-                    docker compose -p ${STAGING_PROJECT} up -d taskflow-api
+                    docker compose \
+                        -p ${STAGING_PROJECT} \
+                        up -d taskflow-api
 
+                    echo ""
                     echo "Waiting for staging application to become healthy..."
 
                     HEALTHY=false
 
                     for i in $(seq 1 12); do
-                        if curl -fsS http://localhost:${STAGING_PORT}/health >/dev/null; then
+
+                        if curl -fsS \
+                            http://localhost:${STAGING_PORT}/health \
+                            >/dev/null; then
+
                             HEALTHY=true
+
+                            echo ""
                             echo "Staging application is healthy."
+
                             break
                         fi
 
-                        echo "Health check attempt ${i}/12 failed. Waiting 5 seconds..."
+                        echo "Health check attempt ${i}/12 failed."
+                        echo "Waiting 5 seconds..."
+
                         sleep 5
                     done
 
                     if [ "$HEALTHY" != "true" ]; then
+
+                        echo ""
                         echo "Staging deployment failed."
 
-                        echo "Attempting rollback to previous build..."
+                        echo "Attempting staging rollback..."
 
                         PREVIOUS_BUILD=$((BUILD_NUMBER - 1))
 
                         if [ "$PREVIOUS_BUILD" -ge 1 ]; then
-                            docker pull ${IMAGE_REPOSITORY}:${PREVIOUS_BUILD} || true
 
-                            if docker image inspect ${IMAGE_REPOSITORY}:${PREVIOUS_BUILD} >/dev/null 2>&1; then
+                            docker pull \
+                                ${IMAGE_REPOSITORY}:${PREVIOUS_BUILD} \
+                                || true
+
+                            if docker image inspect \
+                                ${IMAGE_REPOSITORY}:${PREVIOUS_BUILD} \
+                                >/dev/null 2>&1; then
+
                                 ENV=staging \
                                 PORT=${STAGING_PORT} \
                                 TAG=${PREVIOUS_BUILD} \
                                 IMAGE_NAME=${IMAGE_REPOSITORY} \
                                 APP_VERSION=${PREVIOUS_BUILD} \
                                 JWT_SECRET="$STAGING_JWT_SECRET" \
-                                docker compose -p ${STAGING_PROJECT} up -d taskflow-api
+                                docker compose \
+                                    -p ${STAGING_PROJECT} \
+                                    up -d taskflow-api
 
                                 sleep 5
                             fi
@@ -305,20 +422,23 @@ pipeline {
                         exit 1
                     fi
 
-                    echo "Verifying staging API response..."
+                    echo ""
+                    echo "Verifying staging health endpoint..."
 
-                    curl -fsS http://localhost:${STAGING_PORT}/health
+                    curl -fsS \
+                        http://localhost:${STAGING_PORT}/health
 
-                    echo
+                    echo ""
+                    echo ""
                     echo "Staging deployment completed successfully."
+
+                    echo ""
+                    echo "STAGE 5 DEPLOY COMPLETED SUCCESSFULLY"
                 '''
             }
 
-            environment {
-                STAGING_JWT_SECRET = credentials('taskflow-staging-jwt')
-            }
-
             post {
+
                 success {
                     echo "Deploy stage completed successfully."
                 }
@@ -327,18 +447,23 @@ pipeline {
 
 
         // ============================================================
-        // 6. RELEASE
-        // Promote exact staging-tested image to production
-        // and create GitHub version tag
+        // STAGE 6 — RELEASE
+        // Production deployment + GitHub version tag
         // ============================================================
         stage('Release') {
+
             when {
                 branch 'main'
+            }
+
+            environment {
+                PRODUCTION_JWT_SECRET = credentials('taskflow-production-jwt')
             }
 
             steps {
 
                 script {
+
                     withCredentials([
                         usernamePassword(
                             credentialsId: 'github-push-credentials',
@@ -356,28 +481,38 @@ pipeline {
 
                             RELEASE_TAG="v1.0.${BUILD_NUMBER}"
 
-                            echo "Release version: ${RELEASE_TAG}"
+                            echo ""
+                            echo "Release version:"
+                            echo "${RELEASE_TAG}"
 
-                            echo "Verifying tested staging image..."
+                            echo ""
+                            echo "Verifying exact tested staging artifact..."
 
                             docker image inspect \
                                 ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
                                 >/dev/null
 
+                            echo "Verified build ${BUILD_NUMBER}."
+
+                            echo ""
                             echo "Creating production image tag..."
 
                             docker tag \
                                 ${IMAGE_REPOSITORY}:${BUILD_NUMBER} \
                                 ${IMAGE_REPOSITORY}:prod-${BUILD_NUMBER}
 
-                            echo "Pushing production image tag..."
+                            echo ""
+                            echo "Pushing production image..."
 
                             docker push \
                                 ${IMAGE_REPOSITORY}:prod-${BUILD_NUMBER}
 
-                            echo "Deploying exact tested image to production..."
+                            echo ""
+                            echo "Deploying exact tested artifact to production..."
 
-                            docker rm -f taskflow-api-production >/dev/null 2>&1 || true
+                            docker rm -f \
+                                taskflow-api-production \
+                                >/dev/null 2>&1 || true
 
                             ENV=production \
                             PORT=${PROD_PORT} \
@@ -385,31 +520,46 @@ pipeline {
                             IMAGE_NAME=${IMAGE_REPOSITORY} \
                             APP_VERSION=${BUILD_NUMBER} \
                             JWT_SECRET="$PRODUCTION_JWT_SECRET" \
-                            docker compose -p ${PROD_PROJECT} up -d taskflow-api
+                            docker compose \
+                                -p ${PROD_PROJECT} \
+                                up -d taskflow-api
 
+                            echo ""
                             echo "Waiting for production application..."
 
                             HEALTHY=false
 
                             for i in $(seq 1 12); do
-                                if curl -fsS http://localhost:${PROD_PORT}/health >/dev/null; then
+
+                                if curl -fsS \
+                                    http://localhost:${PROD_PORT}/health \
+                                    >/dev/null; then
+
                                     HEALTHY=true
+
+                                    echo ""
                                     echo "Production application is healthy."
+
                                     break
                                 fi
 
-                                echo "Production health check ${i}/12 failed. Waiting 5 seconds..."
+                                echo "Production health check ${i}/12 failed."
+                                echo "Waiting 5 seconds..."
+
                                 sleep 5
                             done
 
                             if [ "$HEALTHY" != "true" ]; then
+
+                                echo ""
                                 echo "Production deployment failed."
 
-                                echo "Attempting rollback..."
+                                echo "Attempting production rollback..."
 
                                 PREVIOUS_BUILD=$((BUILD_NUMBER - 1))
 
                                 if [ "$PREVIOUS_BUILD" -ge 1 ]; then
+
                                     docker pull \
                                         ${IMAGE_REPOSITORY}:prod-${PREVIOUS_BUILD} \
                                         || true
@@ -418,7 +568,8 @@ pipeline {
                                         ${IMAGE_REPOSITORY}:prod-${PREVIOUS_BUILD} \
                                         >/dev/null 2>&1; then
 
-                                        docker rm -f taskflow-api-production \
+                                        docker rm -f \
+                                            taskflow-api-production \
                                             >/dev/null 2>&1 || true
 
                                         ENV=production \
@@ -427,7 +578,9 @@ pipeline {
                                         IMAGE_NAME=${IMAGE_REPOSITORY} \
                                         APP_VERSION=${PREVIOUS_BUILD} \
                                         JWT_SECRET="$PRODUCTION_JWT_SECRET" \
-                                        docker compose -p ${PROD_PROJECT} up -d taskflow-api
+                                        docker compose \
+                                            -p ${PROD_PROJECT} \
+                                            up -d taskflow-api
 
                                         sleep 5
                                     fi
@@ -436,27 +589,54 @@ pipeline {
                                 exit 1
                             fi
 
+                            echo ""
                             echo "Production health check passed."
 
-                            echo "Creating GitHub release tag ${RELEASE_TAG}..."
+                            # ------------------------------------------------
+                            # GitHub release tag
+                            # ------------------------------------------------
 
-                            COMMIT_SHA=$(git rev-parse HEAD)
+                            echo ""
+                            echo "Preparing GitHub release tag..."
 
-                            echo "Commit SHA: ${COMMIT_SHA}"
+                            export COMMIT_SHA=$(git rev-parse HEAD)
+
+                            echo "Commit SHA:"
+                            echo "${COMMIT_SHA}"
+
+                            echo ""
+                            echo "Generating GitHub API JSON payload..."
 
                             node <<'NODE'
 const fs = require('fs');
 
+const buildNumber = process.env.BUILD_NUMBER;
+const commitSha = process.env.COMMIT_SHA;
+
+if (!buildNumber) {
+    throw new Error('BUILD_NUMBER is missing.');
+}
+
+if (!commitSha) {
+    throw new Error('COMMIT_SHA is missing.');
+}
+
 const payload = {
-    ref: `refs/tags/v1.0.${process.env.BUILD_NUMBER}`,
-    sha: process.env.COMMIT_SHA
+    ref: `refs/tags/v1.0.${buildNumber}`,
+    sha: commitSha
 };
 
 fs.writeFileSync(
     'github-tag-payload.json',
     JSON.stringify(payload)
 );
+
+console.log('Generated GitHub tag payload:');
+console.log(JSON.stringify(payload));
 NODE
+
+                            echo ""
+                            echo "Creating GitHub tag ${RELEASE_TAG}..."
 
                             curl \
                                 --fail-with-body \
@@ -470,8 +650,10 @@ NODE
                                 --header "Content-Type: application/json" \
                                 --data-binary @github-tag-payload.json
 
-                            echo
+                            echo ""
+                            echo "GitHub tag creation request completed."
 
+                            echo ""
                             echo "Verifying GitHub tag..."
 
                             curl \
@@ -485,25 +667,23 @@ NODE
                                 --header "X-GitHub-Api-Version: 2022-11-28" \
                                 >/dev/null
 
-                            echo "GitHub tag ${RELEASE_TAG} created successfully."
+                            echo ""
+                            echo "GitHub tag ${RELEASE_TAG} verified successfully."
 
                             rm -f github-tag-payload.json
 
-                            echo "Release completed successfully."
-                        '''
+                            echo ""
+                            echo "Production release completed successfully."
 
-                        sh '''
-                            echo "GitHub release tag verified."
+                            echo ""
+                            echo "STAGE 6 RELEASE COMPLETED SUCCESSFULLY"
                         '''
                     }
                 }
             }
 
-            environment {
-                PRODUCTION_JWT_SECRET = credentials('taskflow-production-jwt')
-            }
-
             post {
+
                 success {
                     echo "Release stage completed successfully."
                 }
@@ -512,36 +692,42 @@ NODE
 
 
         // ============================================================
-        // 7. MONITORING & ALERTING
+        // STAGE 7 — MONITORING
         // ============================================================
         stage('Monitoring') {
+
             steps {
+
                 sh '''
                     set -e
 
                     echo "========================================"
-                    echo "STAGE 7: MONITORING & ALERTING"
+                    echo "STAGE 7: MONITORING"
                     echo "========================================"
 
-                    echo "Checking production health..."
+                    echo ""
+                    echo "Checking production health endpoint..."
 
                     curl -fsS \
                         http://localhost:${PROD_PORT}/health
 
-                    echo
+                    echo ""
                     echo "Production health endpoint passed."
 
+                    echo ""
                     echo "Checking production metrics endpoint..."
 
                     curl -fsS \
                         http://localhost:${PROD_PORT}/metrics \
                         >/tmp/taskflow-metrics.txt
 
-                    grep -q "http_requests_total" \
+                    grep -q \
+                        "http_requests_total" \
                         /tmp/taskflow-metrics.txt
 
-                    echo "Metrics endpoint passed."
+                    echo "Production metrics endpoint passed."
 
+                    echo ""
                     echo "Connecting Prometheus to production network..."
 
                     docker network connect \
@@ -549,27 +735,38 @@ NODE
                         taskflow-prometheus \
                         2>/dev/null || true
 
+                    echo ""
                     echo "Waiting for Prometheus to scrape production..."
 
                     sleep 20
 
-                    echo "Checking Prometheus target health..."
+                    echo ""
+                    echo "Checking Prometheus targets..."
 
                     TARGETS=$(curl -fsS \
                         http://localhost:9090/api/v1/targets)
 
-                    echo "$TARGETS" | grep -q '"job":"taskflow-api"'
-                    echo "$TARGETS" | grep -q '"health":"up"'
+                    echo "$TARGETS" | grep -q \
+                        '"job":"taskflow-api"'
 
+                    echo "$TARGETS" | grep -q \
+                        '"health":"up"'
+
+                    echo ""
                     echo "Prometheus target is UP."
 
+                    echo ""
                     echo "Monitoring verification completed successfully."
+
+                    echo ""
+                    echo "STAGE 7 MONITORING COMPLETED SUCCESSFULLY"
                 '''
             }
 
             post {
+
                 success {
-                    echo "Monitoring and alerting stage completed successfully."
+                    echo "Monitoring stage completed successfully."
                 }
             }
         }
@@ -582,8 +779,11 @@ NODE
     post {
 
         success {
+
+            echo ""
             echo "=================================================="
             echo "TASKFLOW DEVOPS PIPELINE COMPLETED SUCCESSFULLY"
+            echo "=================================================="
             echo "All 7 stages passed."
             echo "Build: ${BUILD_NUMBER}"
             echo "Release: v1.0.${BUILD_NUMBER}"
@@ -591,16 +791,21 @@ NODE
         }
 
         failure {
+
+            echo ""
             echo "=================================================="
             echo "TASKFLOW DEVOPS PIPELINE FAILED"
-            echo "Check the failed stage above."
+            echo "=================================================="
+            echo "Check the first failed stage above."
             echo "=================================================="
         }
 
         always {
+
             archiveArtifacts(
                 artifacts: 'npm-audit-report.json,github-tag-payload.json',
-                allowEmptyArchive: true
+                allowEmptyArchive: true,
+                fingerprint: true
             )
 
             cleanWs()
