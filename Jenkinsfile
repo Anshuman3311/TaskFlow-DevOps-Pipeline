@@ -7,8 +7,6 @@ pipeline {
         PROD_PORT        = '4000'
 
         PATH = "/opt/homebrew/bin:/Users/anshumanjadav/.docker/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-
-        SONAR_TOKEN = credentials('sonar-api-token')
     }
 
     options {
@@ -114,7 +112,7 @@ pipeline {
                         echo "Running SonarCloud analysis..."
 
                         sonar-scanner \
-                          -Dsonar.token="$SONAR_TOKEN" \
+                          -Dsonar.token="$SONAR_AUTH_TOKEN" \
                           -Dsonar.qualitygate.wait=true
                     '''
                 }
