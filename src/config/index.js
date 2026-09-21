@@ -2,13 +2,17 @@
 // a single validated config object. Everything else in the app should read
 // config from here rather than reaching into process.env directly, so all
 // environment-specific behaviour lives in one place.
+
 require('dotenv').config();
 
 const nodeEnv = process.env.NODE_ENV || 'development';
+
 const isProduction = nodeEnv === 'production';
+
 const isTest = nodeEnv === 'test';
 
 const DEFAULT_JWT_SECRET = 'dev-secret-change-me';
+
 const jwtSecret = process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
 
 if (isProduction && jwtSecret === DEFAULT_JWT_SECRET) {
@@ -18,6 +22,7 @@ if (isProduction && jwtSecret === DEFAULT_JWT_SECRET) {
   console.error(
     'FATAL: JWT_SECRET must be set to a strong, unique value in production.'
   );
+
   process.exit(1);
 }
 
@@ -29,7 +34,10 @@ const config = {
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '2h',
   logLevel: process.env.LOG_LEVEL || (isProduction ? 'info' : 'debug'),
-  appVersion: process.env.npm_package_version || '1.0.0',
+  appVersion:
+    process.env.APP_VERSION ||
+    process.env.npm_package_version ||
+    '1.0.0',
 };
 
 module.exports = config;

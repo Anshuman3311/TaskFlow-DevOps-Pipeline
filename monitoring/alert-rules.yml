@@ -1,0 +1,36 @@
+groups:
+  - name: taskflow-api-alerts
+
+    rules:
+
+      - alert: TaskFlowAPIDown
+        expr: up{job="taskflow-api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "TaskFlow API is unavailable"
+          description: "Prometheus cannot scrape the TaskFlow API metrics endpoint."
+
+      - alert: TaskFlowHighServerErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="taskflow-api",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="taskflow-api"}[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High TaskFlow API server error rate"
+          description: "More than 5% of observed HTTP requests are returning 5xx responses."
+
+      - alert: TaskFlowHighEventLoopLag
+        expr: nodejs_eventloop_lag_p99_seconds{job="taskflow-api"} > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Node.js event loop latency"
+          description: "TaskFlow API p99 event loop lag has exceeded 500 milliseconds."
