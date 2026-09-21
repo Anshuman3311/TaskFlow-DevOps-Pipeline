@@ -278,9 +278,6 @@ pipeline {
         // STAGE 6 - RELEASE
         // =====================================================
         stage('Release') {
-            when {
-                branch 'main'
-            }
 
             steps {
                 echo '========== RELEASE STAGE =========='
