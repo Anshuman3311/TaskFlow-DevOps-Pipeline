@@ -542,39 +542,66 @@ NODE
                             echo ""
                             echo "Creating GitHub tag ${RELEASE_TAG}..."
 
-                            curl \
-                                --fail-with-body \
+                            # GitHub tag creation is best-effort metadata, not a
+                            # deployment step - production is already live and
+                            # healthy at this point (checked above). A GitHub
+                            # API problem (bad token scope, permissions, rate
+                            # limit, etc.) should not fail the whole pipeline
+                            # or skip the Monitoring stage, so we temporarily
+                            # disable "exit on error" around just this call.
+                            set +e
+
+                            TAG_HTTP_STATUS=$(curl \
                                 --silent \
                                 --show-error \
+                                --output github-tag-response.json \
+                                --write-out "%{http_code}" \
                                 --request POST \
                                 --url "https://api.github.com/repos/Anshuman3311/TaskFlow-DevOps-Pipeline/git/refs" \
                                 --header "Accept: application/vnd.github+json" \
                                 --header "Authorization: Bearer ${GITHUB_TOKEN}" \
                                 --header "X-GitHub-Api-Version: 2022-11-28" \
                                 --header "Content-Type: application/json" \
-                                --data-binary @github-tag-payload.json
+                                --data-binary @github-tag-payload.json)
 
-                            echo ""
-                            echo "GitHub tag creation completed."
+                            set -e
 
-                            echo ""
-                            echo "Verifying GitHub tag..."
+                            if [ "$TAG_HTTP_STATUS" -ge 200 ] && [ "$TAG_HTTP_STATUS" -lt 300 ]; then
 
-                            curl \
-                                --fail \
-                                --silent \
-                                --show-error \
-                                --request GET \
-                                --url "https://api.github.com/repos/Anshuman3311/TaskFlow-DevOps-Pipeline/git/ref/tags/${RELEASE_TAG}" \
-                                --header "Accept: application/vnd.github+json" \
-                                --header "Authorization: Bearer ${GITHUB_TOKEN}" \
-                                --header "X-GitHub-Api-Version: 2022-11-28" \
-                                >/dev/null
+                                echo "GitHub tag creation completed (HTTP ${TAG_HTTP_STATUS})."
 
-                            echo ""
-                            echo "GitHub tag ${RELEASE_TAG} verified successfully."
+                                echo ""
+                                echo "Verifying GitHub tag..."
 
-                            rm -f github-tag-payload.json
+                                curl \
+                                    --fail \
+                                    --silent \
+                                    --show-error \
+                                    --request GET \
+                                    --url "https://api.github.com/repos/Anshuman3311/TaskFlow-DevOps-Pipeline/git/ref/tags/${RELEASE_TAG}" \
+                                    --header "Accept: application/vnd.github+json" \
+                                    --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+                                    --header "X-GitHub-Api-Version: 2022-11-28" \
+                                    >/dev/null
+
+                                echo ""
+                                echo "GitHub tag ${RELEASE_TAG} verified successfully."
+
+                            else
+
+                                echo "WARNING: GitHub tag creation failed (HTTP ${TAG_HTTP_STATUS})."
+                                echo "Response body:"
+                                cat github-tag-response.json 2>/dev/null || true
+                                echo ""
+                                echo "This does NOT affect the production deployment above, which already"
+                                echo "succeeded and passed its health check. Common causes: the token used"
+                                echo "for 'github-push-credentials' is missing write access to this repo -"
+                                echo "for a classic PAT it needs the 'repo' scope, for a fine-grained PAT it"
+                                echo "needs 'Contents: Read and write' permission explicitly granted on this"
+                                echo "repository."
+                            fi
+
+                            rm -f github-tag-payload.json github-tag-response.json
 
                             echo ""
                             echo "Release completed successfully."
